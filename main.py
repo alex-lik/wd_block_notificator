@@ -89,8 +89,13 @@ JOIN "Drivers" d ON sq."Driver_No" = d."Driver_No";
 		return cars
 	except Exception as EX:
 		logger.exception(EX)
-		connect.rollback()
-		connect.close()
+		if connect:
+			try:
+				connect.rollback()
+				connect.close()
+			except Exception as cleanup_error:
+				logger.exception(cleanup_error)
+		return {}
 
 
 ##################################################################################################
@@ -139,8 +144,8 @@ def check_number_on_block_by_soz(session, server_id, black_list):
 	except Exception as err:
 		logger.info('_________________________________________________________________________________________')
 		logger.opt(exception=True).error(err)
-		return None
-	
+		return {}
+
 @logger.catch
 def get_id_in_server(server_id, taxi_name, session):
 	"""Получение айди службы в списке служб сервера"""
@@ -203,11 +208,17 @@ def get_driver_statistics(session, servers, car_num, taxi_name):
 
 @logger.catch
 def check(black_list, session):
+	if not black_list:
+		logger.warning('black_list is None or empty')
+		return
 	for taxi in ['Jet', 'Fly', 'Magdack', '898', 'Allo']:
 		logger.add(f"{taxi}.log")
 		log(f'Search blocked driver in taxi: {taxi}')
 		host, database, taxi_name, chat_id = get_tn_data(taxi)
 		cars = get_cardata(host, database)
+		if not cars:
+			logger.warning(f'Failed to get car data for {taxi}')
+			continue
 		count = 0
 		for carnum in black_list:
 			if carnum in cars:
@@ -290,23 +301,34 @@ def check_work_time():
 	finish = time(20,30)
 	now = datetime.now().time()
 
-	if now > start and now < finish: 
+	if now > start and now < finish:
 		return False
-	else: 
-		log('No work_time',  now)
+	else:
+		log(f'No work_time: {now}')
 		return True
 	
 if __name__ == '__main__':
 	db = database.Database()
 
 	login, password, taxi_id = 'fly', '0933137532', 997
-	session = get_session(login, password)
 	servers = {'13+1 (Киев)': '298', '14+1 (Киев)': '297', '15+1 (Киев)': '295', 'Комфорт (15+1) (Киев)': '303', 'Стандарт (14плюс1) (Киев)': '296'}
+	session = None
+	session_update_count = 0
+
 	while True:
 		try:
+			# Переинициализируем сессию каждые 6 часов (6 итераций по 60 минут)
+			if session is None or session_update_count >= 6:
+				session = get_session(login, password)
+				session_update_count = 0
+				logger.info('WD session reinitialized')
+
 			black_list = get_black_list(session)
-			if not check_work_time():	
+			if not check_work_time():
 				check(black_list, session)
-		except: pass
+			session_update_count += 1
+		except Exception as e:
+			logger.exception(f'Error in main loop: {e}')
+			session = None  # Попробуем пересоздать сессию в следующей итерации
 		sleep(60 * 60)
 	# check2(black_list)
