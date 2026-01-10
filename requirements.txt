@@ -4,3 +4,4 @@ loguru
 telebot
 firebirdsql
 python-dotenv
+sentry-sdk

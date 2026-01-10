@@ -2,27 +2,45 @@ import requests
 from requests import sessions
 import json
 import re
-# import datetime
 from time import sleep
 import police
 import taxi_data
+import utils
 
 from loguru import logger
-# from icecream import ic
-# from alive_progress import alive_bar
 from threading import Thread
 import firebirdsql as fdb
-# import pytelegrambotapi
 import telebot
-from bs4 import BeautifulSoup 
+from bs4 import BeautifulSoup
 from datetime import timedelta, datetime, time
-import re
 import database
+import os
+from dotenv import load_dotenv
+import sentry_sdk
 
-DEBUG = False
+# Загрузка переменных окружения
+load_dotenv()
 
-token = '5005136355:AAE8e8rNV71_7d1MXuNw4eR3GWY2xgjWmr8'
-bot = telebot.TeleBot(token)
+# ===== SENTRY ИНИЦИАЛИЗАЦИЯ =====
+SENTRY_DSN = os.getenv('SENTRY_DSN')
+if SENTRY_DSN:
+	sentry_sdk.init(
+		dsn=SENTRY_DSN,
+		traces_sample_rate=0.1,
+		environment=os.getenv('ENV', 'development')
+	)
+	logger.info('Sentry initialized')
+else:
+	logger.warning('Sentry DSN not configured')
+
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+
+# ===== TELEGRAM BOT ИНИЦИАЛИЗАЦИЯ =====
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+if not TELEGRAM_BOT_TOKEN:
+	raise ValueError('TELEGRAM_BOT_TOKEN not found in environment variables')
+
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 
 def send_message(text, chat_id):
@@ -56,9 +74,9 @@ def get_tn_data(taxi):
 
 	
 @logger.catch
-
-def get_cardata(host, database):
-	''' Получение курсора, выполнение запроса с возвращением результата, если надо то комит , после закрытие курсора и подключения '''
+def get_cardata(host, database, taxi_name='Unknown'):
+	''' Получение данных авто из Firebird базы с обработкой ошибок '''
+	connect = None
 	try:
 		connect = fdb.connect(host=host, database=database, user=evos.user, password=evos.password, charset='UTF8')
 		# connect = fdb.connect(host=evos.host, database=evos.database, user=evos.user, password=evos.password, charset='UTF8')
@@ -86,9 +104,34 @@ JOIN "Drivers" d ON sq."Driver_No" = d."Driver_No";
 		cars = {}
 		for signal, number, marka, year, color, open_time, balans, f,i,o, phone3, phone2, phone1 in result:
 			cars[number] = {'marka':marka, 'year':year, 'color':color, 'signal':signal, 'f':f, 'i':i, 'o':o, 'balans':balans, 'open_time':open_time, 'phone1':phone1, 'phone2':phone2, 'phone3':phone3}
+		logger.info(f'Successfully fetched {len(cars)} cars from {taxi_name}')
 		return cars
+	except fdb.Error as firebird_error:
+		error_msg = utils.get_firebird_connection_error_message(firebird_error)
+		full_error = f'Firebird error for {taxi_name} ({host}): {error_msg}'
+		logger.error(full_error)
+		sentry_sdk.capture_exception(firebird_error)
+		utils.send_error_notification(
+			'Firebird Connection Error',
+			full_error,
+			'ERROR'
+		)
+		if connect:
+			try:
+				connect.rollback()
+				connect.close()
+			except Exception as cleanup_error:
+				logger.exception(cleanup_error)
+		return {}
 	except Exception as EX:
-		logger.exception(EX)
+		error_msg = f'Unexpected error fetching car data from {taxi_name}: {str(EX)}'
+		logger.exception(error_msg)
+		sentry_sdk.capture_exception(EX)
+		utils.send_error_notification(
+			'Car Data Fetch Error',
+			error_msg,
+			'ERROR'
+		)
 		if connect:
 			try:
 				connect.rollback()
@@ -101,13 +144,8 @@ JOIN "Drivers" d ON sq."Driver_No" = d."Driver_No";
 ##################################################################################################
 @logger.catch
 def get_session(login, password):
-	''' Авторизация на WD '''
-	url_auth = 'http://wd.soz.in.ua/Account/LogOn?ReturnUrl=%2f'                    # Url страницы авторизации
-	data_auth = {'username': login, 'password': password, 'RememberMe': 'true'}   # Авторизационные данные
-	# Делаем пост запрос на авторизацию и в рамках сессии
-	with requests.Session() as session:
-		session.post(url_auth, data=data_auth)  #
-		return session
+	''' Авторизация на WD с проверкой доступности и обработкой ошибок '''
+	return utils.get_session_with_auth(login, password)
 
 
 @logger.catch
@@ -129,12 +167,44 @@ def parse_data(result):
 
 @logger.catch
 def check_number_on_block_by_soz(session, server_id, black_list):
-	""" Проверяем номер авто на предмет блокировки по одному серверу """
+	""" Проверяем номер авто на предмет блокировки по одному серверу с обработкой 503 """
 	try:
 		check_data = {"Group.Id":server_id,"_search":"true","rows":"5000","page":"1","sidx":"Id","sord":"asc","User.FullName":"СОЗ"}
-		response = session.get('http://wd.soz.in.ua/CarInfoBlackByGroup/SearchData/', data=check_data)
+		url = 'http://wd.soz.in.ua/CarInfoBlackByGroup/SearchData/'
+
+		# Первая попытка обычным способом
+		response = utils.make_request('GET', url, session, data=check_data)
+
+		# Если 503 - пробуем с прокси
+		if response and response.status_code == 503:
+			logger.warning('Got 503 from WD, trying with proxy...')
+			utils.send_error_notification(
+				'WD Server 503',
+				f'WD returned 503 for server {server_id}, attempting with proxy',
+				'WARNING'
+			)
+			response = utils.make_request('GET', url, session, data=check_data, use_proxy=True)
+
+		if response is None:
+			logger.error(f'Failed to get blacklist for server {server_id}')
+			utils.send_error_notification(
+				'WD Blacklist Fetch Failed',
+				f'Could not fetch blacklist for server {server_id}',
+				'ERROR'
+			)
+			return {}
+
+		if response.status_code >= 400:
+			logger.error(f'Got HTTP {response.status_code} from WD')
+			utils.send_error_notification(
+				'WD HTTP Error',
+				f'WD returned HTTP {response.status_code} for server {server_id}',
+				'ERROR'
+			)
+			return {}
+
 		result = response.json()
-		if result['total'] > 0:								# Если колчество результатов больше 0
+		if result['total'] > 0:
 			for row in result['rows']:
 				carnum = row['cell'][0]
 				description = row['cell'][1]
@@ -142,8 +212,14 @@ def check_number_on_block_by_soz(session, server_id, black_list):
 		return black_list
 
 	except Exception as err:
-		logger.info('_________________________________________________________________________________________')
-		logger.opt(exception=True).error(err)
+		error_msg = f'Error checking blacklist for server {server_id}: {str(err)}'
+		logger.exception(error_msg)
+		sentry_sdk.capture_exception(err)
+		utils.send_error_notification(
+			'Blacklist Check Error',
+			error_msg,
+			'ERROR'
+		)
 		return {}
 
 @logger.catch
@@ -215,7 +291,7 @@ def check(black_list, session):
 		logger.add(f"{taxi}.log")
 		log(f'Search blocked driver in taxi: {taxi}')
 		host, database, taxi_name, chat_id = get_tn_data(taxi)
-		cars = get_cardata(host, database)
+		cars = get_cardata(host, database, taxi_name)
 		if not cars:
 			logger.warning(f'Failed to get car data for {taxi}')
 			continue
@@ -281,14 +357,35 @@ def standart_phone(phone):
 
 @logger.catch
 def get_black_list(session=None):
-	login, password, taxi_id = 'fly', '0933137532', 997
-	servers = (303, 296)
-	black_list = {}
-	if not session: session = get_session(login, password)
-	for server in servers:
-		log(f"Download BlackList for server:{server}")
-		black_list = check_number_on_block_by_soz(session, server, black_list)
-	return black_list
+	try:
+		login, password = taxi_data.get_wd_credentials()
+		servers = (303, 296)
+		black_list = {}
+		if not session:
+			session = get_session(login, password)
+			if session is None:
+				logger.error('Failed to create session in get_black_list')
+				utils.send_error_notification(
+					'Blacklist Session Error',
+					'Failed to create WD session for blacklist fetching',
+					'ERROR'
+				)
+				return {}
+
+		for server in servers:
+			log(f"Download BlackList for server:{server}")
+			black_list = check_number_on_block_by_soz(session, server, black_list)
+		return black_list
+	except Exception as e:
+		error_msg = f'Error getting blacklist: {str(e)}'
+		logger.exception(error_msg)
+		sentry_sdk.capture_exception(e)
+		utils.send_error_notification(
+			'Blacklist Fetch Error',
+			error_msg,
+			'ERROR'
+		)
+		return {}
 
 
 def check2(black_list):
@@ -308,27 +405,71 @@ def check_work_time():
 		return True
 	
 if __name__ == '__main__':
-	db = database.Database()
+	try:
+		logger.info('WD Block Notificator started')
+		db = database.Database()
 
-	login, password, taxi_id = 'fly', '0933137532', 997
-	servers = {'13+1 (Киев)': '298', '14+1 (Киев)': '297', '15+1 (Киев)': '295', 'Комфорт (15+1) (Киев)': '303', 'Стандарт (14плюс1) (Киев)': '296'}
-	session = None
-	session_update_count = 0
+		# Получаем учётные данные из .env
+		login, password = taxi_data.get_wd_credentials()
+		if not login or not password:
+			raise ValueError('WD_LOGIN and WD_PASSWORD must be set in .env')
 
-	while True:
-		try:
-			# Переинициализируем сессию каждые 6 часов (6 итераций по 60 минут)
-			if session is None or session_update_count >= 6:
-				session = get_session(login, password)
-				session_update_count = 0
-				logger.info('WD session reinitialized')
+		servers = {'13+1 (Киев)': '298', '14+1 (Киев)': '297', '15+1 (Киев)': '295', 'Комфорт (15+1) (Киев)': '303', 'Стандарт (14плюс1) (Киев)': '296'}
+		session = None
+		session_update_count = 0
+		error_count = 0
+		MAX_ERRORS_BEFORE_ALERT = 3
 
-			black_list = get_black_list(session)
-			if not check_work_time():
-				check(black_list, session)
-			session_update_count += 1
-		except Exception as e:
-			logger.exception(f'Error in main loop: {e}')
-			session = None  # Попробуем пересоздать сессию в следующей итерации
-		sleep(60 * 60)
-	# check2(black_list)
+		while True:
+			try:
+				# Переинициализируем сессию каждые 6 часов (6 итераций по 60 минут)
+				if session is None or session_update_count >= 6:
+					session = get_session(login, password)
+					if session is None:
+						error_count += 1
+						if error_count >= MAX_ERRORS_BEFORE_ALERT:
+							utils.send_error_notification(
+								'WD Session Failed',
+								f'Failed to create WD session {error_count} times in a row',
+								'CRITICAL'
+							)
+							error_count = 0
+						logger.error('Failed to create WD session, retrying...')
+						sleep(60)  # Ждём 1 минуту перед повтором вместо 60 минут
+						continue
+					else:
+						session_update_count = 0
+						logger.info('WD session reinitialized successfully')
+						error_count = 0
+
+				black_list = get_black_list(session)
+				if not check_work_time():
+					check(black_list, session)
+				session_update_count += 1
+			except Exception as e:
+				error_count += 1
+				error_msg = f'Error in main loop (count: {error_count}): {str(e)}'
+				logger.exception(error_msg)
+				sentry_sdk.capture_exception(e)
+				if error_count >= MAX_ERRORS_BEFORE_ALERT:
+					utils.send_error_notification(
+						'Main Loop Critical Error',
+						error_msg,
+						'CRITICAL'
+					)
+					error_count = 0
+				session = None  # Попробуем пересоздать сессию в следующей итерации
+			try:
+				sleep(60 * 60)
+			except KeyboardInterrupt:
+				logger.info('Application interrupted by user')
+				break
+	except Exception as e:
+		error_msg = f'Critical application error: {str(e)}'
+		logger.exception(error_msg)
+		sentry_sdk.capture_exception(e)
+		utils.send_error_notification(
+			'Critical Application Error',
+			error_msg,
+			'CRITICAL'
+		)

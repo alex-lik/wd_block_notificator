@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 # Загрузка переменных окружения из файла .env
 load_dotenv()
 
+def get_wd_credentials():
+	"""Получает учётные данные для WD dispatch системы"""
+	return os.getenv('WD_LOGIN'), os.getenv('WD_PASSWORD')
+
 def get_tn_data(taxi):
     if taxi == 'Fly':
         return (
