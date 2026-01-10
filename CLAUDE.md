@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **wd_block_notificator** is a Telegram notification service that monitors blocked vehicles across multiple taxi dispatch servers. It:
 
+⚠️ **Для понимания логики работы см. файл [LOGIC_EXPLAINED.md](LOGIC_EXPLAINED.md)** - полное объяснение на русском для неспециалистов!
+
 1. Fetches blacklists from the WD dispatch system (SOZ) via HTTP
 2. Queries taxi database servers (Firebird) for vehicle and driver details
 3. Checks vehicle registration status via baza-gai.com.ua (police database)
