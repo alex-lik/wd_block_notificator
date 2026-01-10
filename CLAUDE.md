@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 🐳 **Docker гайд** см. [DOCKER_GUIDE.md](DOCKER_GUIDE.md) - как запустить в Docker контейнере!
 
+🌐 **Прокси гайд** см. [PROXY_GUIDE.md](PROXY_GUIDE.md) - как использовать прокси с авторизацией!
+
 1. Fetches blacklists from the WD dispatch system (SOZ) via HTTP
 2. Queries taxi database servers (Firebird) for vehicle and driver details
 3. Checks vehicle registration status via baza-gai.com.ua (police database)

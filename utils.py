@@ -59,10 +59,25 @@ def send_error_notification(title: str, message: str, error_type: str = 'ERROR')
 
 
 def parse_proxy_list(proxy_string: str) -> List[str]:
-	"""Парсит строку с прокси-адресами"""
+	"""Парсит строку с прокси-адресами (поддерживает авторизацию)"""
 	if not proxy_string or not proxy_string.strip():
 		return []
-	return [p.strip() for p in proxy_string.split(',') if p.strip()]
+	proxies = [p.strip() for p in proxy_string.split(',') if p.strip()]
+
+	# Валидируем и логируем прокси
+	validated_proxies = []
+	for proxy in proxies:
+		if proxy.startswith('http://') or proxy.startswith('https://'):
+			validated_proxies.append(proxy)
+			# Проверяем авторизацию
+			if '@' in proxy:
+				logger.info(f'Proxy with auth configured: {proxy.split("@")[1]}')
+			else:
+				logger.info(f'Proxy configured: {proxy}')
+		else:
+			logger.warning(f'Invalid proxy format: {proxy} (should be http://... or https://...)')
+
+	return validated_proxies
 
 
 def make_request(
