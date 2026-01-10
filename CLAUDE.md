@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 📊 **Визуальная диаграмма** см. [FLOW_DIAGRAM.txt](FLOW_DIAGRAM.txt) - ASCII схемы всех процессов!
 
+🐳 **Docker гайд** см. [DOCKER_GUIDE.md](DOCKER_GUIDE.md) - как запустить в Docker контейнере!
+
 1. Fetches blacklists from the WD dispatch system (SOZ) via HTTP
 2. Queries taxi database servers (Firebird) for vehicle and driver details
 3. Checks vehicle registration status via baza-gai.com.ua (police database)
@@ -207,6 +209,25 @@ DEBUG=False
 - `PROXY_LIST` is optional - leave empty if no proxies needed
 
 ## Common Commands
+
+### Docker (Production - Recommended)
+
+```bash
+# Quick restart (Linux/Mac)
+chmod +x docker-restart.sh
+./docker-restart.sh
+
+# Quick restart (Windows)
+docker-restart.bat
+
+# Manual Docker commands
+docker-compose build --no-cache    # Build image without cache
+docker-compose up -d               # Start container
+docker-compose logs -f             # Stream logs
+docker-compose down                # Stop and remove
+docker-compose ps                  # Show status
+docker-compose restart             # Restart container
+```
 
 ### Local Development
 

@@ -347,7 +347,7 @@ def check(black_list, session):
 def standart_phone(phone):
     """Нормализатор номеров"""
     
-    phone = re.sub("\D", "", phone)                         # Удаляем из номера всё, кроме цифр
+    phone = re.sub(r"\D", "", phone)                        # Удаляем из номера всё, кроме цифр
     if re.match(r'^[3][8][0][0-9]{9}$', phone): return phone[2:]                                    # Возвращаем номер без 380
     elif re.match(r'^[8][0][0-9]{9}$', phone):  return phone[1:]                                    # Возвращаем номер без 80
     elif re.match(r'^[0][0-9]{9}$', phone):     return phone                                        # Возвращаем номер без 0
