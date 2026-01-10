@@ -119,12 +119,20 @@ def make_request(
 	if use_proxy and PROXY_LIST:
 		if proxy_index < len(PROXY_LIST):
 			proxy_url = PROXY_LIST[proxy_index]
+			# Скрываем пароль в логах
+			safe_proxy_url = proxy_url
+			if '@' in proxy_url:
+				parts = proxy_url.split('@')
+				creds_part = parts[0]  # http://user:pass
+				host_part = parts[1]   # proxy.com:port
+				# Показываем только http://***:***@proxy.com:port
+				safe_proxy_url = creds_part.split('://')[0] + '://***:***@' + host_part
 			proxies = {
 				'http': proxy_url,
 				'https': proxy_url,
 			}
 			kwargs['proxies'] = proxies
-			logger.info(f'Using proxy {proxy_index}: {proxy_url}')
+			logger.info(f'Using proxy {proxy_index}: {safe_proxy_url}')
 
 	for attempt in range(REQUEST_RETRIES):
 		try:
@@ -238,12 +246,25 @@ def get_session_with_auth(login: str, password: str) -> Optional[sessions.Sessio
 
 			if status_code == 503:
 				# Пробуем с прокси
-				logger.info('Attempting to authenticate through proxy...')
-				response = make_request(
-					'POST', url_auth, session,
-					data=data_auth,
-					use_proxy=True
-				)
+				if PROXY_LIST:
+					logger.info(f'Attempting to authenticate through proxy... (total proxies: {len(PROXY_LIST)})')
+					response = make_request(
+						'POST', url_auth, session,
+						data=data_auth,
+						use_proxy=True
+					)
+					if response:
+						logger.info(f'Proxy request completed with status: {response.status_code}')
+					else:
+						logger.error('Proxy request failed (no response)')
+				else:
+					logger.error('No proxies configured, cannot retry')
+					send_error_notification(
+						'WD Server 503 - No Proxies',
+						'WD returned 503 but no proxies configured in PROXY_LIST',
+						'ERROR'
+					)
+					return None
 			else:
 				send_error_notification(
 					'WD Dispatch System Unavailable',
