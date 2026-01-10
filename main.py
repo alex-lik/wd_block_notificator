@@ -285,62 +285,74 @@ def get_driver_statistics(session, servers, car_num, taxi_name):
 @logger.catch
 def check(black_list, session):
 	if not black_list:
-		logger.warning('black_list is None or empty')
+		logger.warning('⚠️  Blacklist is empty, skipping check')
 		return
-	for taxi in ['Jet', 'Fly', 'Magdack', '898', 'Allo']:
-		logger.add(f"{taxi}.log")
-		log(f'Search blocked driver in taxi: {taxi}')
-		host, database, taxi_name, chat_id = get_tn_data(taxi)
-		cars = get_cardata(host, database, taxi_name)
-		if not cars:
-			logger.warning(f'Failed to get car data for {taxi}')
-			continue
-		count = 0
-		for carnum in black_list:
-			if carnum in cars:
-				try:
-					if db.check_record(carnum, taxi): continue
-					count += 1
-					data = cars[carnum]
-					contacts = ''
-					if data.get('f'): contacts += f"{data['f']} "
-					if data.get('i'): contacts += f"{data['i']} "
-					if data.get('o'): contacts += f"{data['o']} "
-					phones = []
-					for phone in (data.get('phone1'), data.get('phone2'), data.get('phone3')):
-						phone = standart_phone(phone)
-						if not phone:continue
-						if phone in phones: continue
-						phones.append(phone)
-					for phone in phones: contacts += f'\n{phone}'
-					contacts += f"\nБаланс: {round(data['balans'],2)}"
-					if data.get('open_time'):
-						open_time = data.get('open_time')
-						try:
-							open_time_datetime = datetime.strptime(str(open_time), '%Y-%m-%d %H:%M:%S.%f')
-							formatted_open_time = open_time_datetime.strftime('%Y-%m-%d')
-							contacts += f"\nБыл в программе: {formatted_open_time}"
 
-						except ValueError:
-							if open_time:
-								formatted_open_time = str(open_time)
+	logger.info('=' * 80)
+	logger.info('🔎 STARTING CAR CHECK CYCLE')
+	logger.info(f'Checking {len(black_list)} blocked cars across 5 taxis')
+	logger.info('=' * 80)
+
+	taxis_list = ['Jet', 'Fly', 'Magdack', '898', 'Allo']
+	for taxi_idx, taxi in enumerate(taxis_list, 1):
+		logger.add(f"{taxi}.log")
+		try:
+			logger.warning(f'\n🚕 [{taxi_idx}/5] TAXI: {taxi}')
+			log(f'Search blocked driver in taxi: {taxi}')
+			host, database, taxi_name, chat_id = get_tn_data(taxi)
+			logger.info(f'Fetching {len(black_list)} cars from {taxi_name}...')
+			cars = get_cardata(host, database, taxi_name)
+			if not cars:
+				logger.warning(f'Failed to get car data for {taxi}')
+				logger.remove()
+				continue
+			logger.info(f'Loaded {len(cars)} cars, comparing...')
+			count = 0
+			for carnum in black_list:
+				if carnum in cars:
+					try:
+						if db.check_record(carnum, taxi): continue
+						count += 1
+						data = cars[carnum]
+						contacts = ''
+						if data.get('f'): contacts += f"{data['f']} "
+						if data.get('i'): contacts += f"{data['i']} "
+						if data.get('o'): contacts += f"{data['o']} "
+						phones = []
+						for phone in (data.get('phone1'), data.get('phone2'), data.get('phone3')):
+							phone = standart_phone(phone)
+							if not phone:continue
+							if phone in phones: continue
+							phones.append(phone)
+						for phone in phones: contacts += f'\n{phone}'
+						contacts += f"\nБаланс: {round(data['balans'],2)}"
+						if data.get('open_time'):
+							open_time = data.get('open_time')
+							try:
+								open_time_datetime = datetime.strptime(str(open_time), '%Y-%m-%d %H:%M:%S.%f')
+								formatted_open_time = open_time_datetime.strftime('%Y-%m-%d')
 								contacts += f"\nБыл в программе: {formatted_open_time}"
 
-					message = f'''{carnum} - позывной: {data['signal']}, марка:  {data['marka']}, год: {data['year']}, цвет: {data['color']}\n\n{contacts}'''
-					police_info = police.check_in_police(carnum)
-					if police_info: message += '\n\nПо данным сайта baza-gai.com.ua: ' + police_info 
-					else: message += '\n\nПо данным сайта baza-gai.com.ua: отсутствуют данные по номеру ' + carnum
-					message += f"\n\nПричина блокировки - {black_list[carnum]}"
-					logger.info(taxi + ' ||| ' + message)
-					db.insert_record(taxi, carnum)
-					# work_in_data = get_driver_statistics(session, servers, carnum, taxi_name)
-					# if work_in_data:
-					# 	_, work_in =  work_in_data
-					# 	message += '\n' + 'Работает в ' + work_in
-					send_message(message, chat_id)
-				except Exception as EX:
-					logger.exception(EX)
-		logger.remove()
+							except ValueError:
+								if open_time:
+									formatted_open_time = str(open_time)
+									contacts += f"\nБыл в программе: {formatted_open_time}"
+
+						message = f'''{carnum} - позывной: {data['signal']}, марка:  {data['marka']}, год: {data['year']}, цвет: {data['color']}\n\n{contacts}'''
+						police_info = police.check_in_police(carnum)
+						if police_info: message += '\n\nПо данным сайта baza-gai.com.ua: ' + police_info
+						else: message += '\n\nПо данным сайта baza-gai.com.ua: отсутствуют данные по номеру ' + carnum
+						message += f"\n\nПричина блокировки - {black_list[carnum]}"
+						logger.info(f'✅ FOUND: {carnum}')
+						db.insert_record(taxi, carnum)
+						send_message(message, chat_id)
+					except Exception as EX:
+						logger.exception(EX)
+			logger.info(f'✅ {taxi_name}: {count} new blocked cars found')
+		except Exception as taxi_error:
+			logger.exception(f'❌ Error processing {taxi}: {taxi_error}')
+		finally:
+			logger.remove()
 	
 
 @logger.catch

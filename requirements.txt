@@ -3,5 +3,6 @@ beautifulsoup4
 loguru
 telebot
 firebirdsql
+passlib
 python-dotenv
 sentry-sdk
