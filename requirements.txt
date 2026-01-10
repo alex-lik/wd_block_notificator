@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+loguru
+telebot
+firebirdsql
+python-dotenv
